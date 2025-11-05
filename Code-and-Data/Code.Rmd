@@ -17,6 +17,7 @@ install.packages("bruceR")
 install.packages("bsts")
 install.packages("cpm")
 install.packages("dplyr")
+install.packages("doParallel")
 install.packages("exuber")
 install.packages("fDMA")
 install.packages("forecast")
@@ -30,13 +31,13 @@ install.packages("MCS")
 install.packages("Metrics")
 install.packages("multDM")
 install.packages("readxl")
+install.packages("RhpcBLASctl")
 install.packages("rugarch")
 install.packages("tseries")
 install.packages("urca")
 install.packages("vars")
 install.packages("xts")
 install.packages("zoo")
-install.packages("doParallel")
 ```
 
 After installing all the required packages, the libraries are loaded.
@@ -60,6 +61,7 @@ library(MCS)
 library(Metrics)
 library(multDM)
 library(readxl)
+library(RhpcBLASctl)
 library(rugarch)
 library(tseries)
 library(urca)
@@ -484,34 +486,30 @@ The simulation study provides evidence that the change point detection model out
 
 # Detection phase
 
-For the empirical analysis, the Renixx index is used as a real-world data example.
+To analyze green bubbles, several variables are considered and imported into the R environment. Two main categories are distinguished: economic and financial variables, and Google Trends data. The empirical analysis uses the Renixx index as a real-world example.
 
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: These plots are for reference only and not included in the article.
-#Updating of the data.
+```{r}
+#Note: when running the code from the console, ensure the working directory is set before importing the dataset.
+load("Dataset.RData")
+```
+
+```{r, echo = FALSE, results = 'hide', include = TRUE, eval = FALSE}
+#Note:The following chunk can also be used to build the dataset. Ensure the working directory is properly set before importing the data when running from the console.
+##RENIXX
 renixx <- read.csv("Economic variables/Renixx.csv")
-#Descriptive statistics
+#Re-arrangement
 renixx$date <- ymd(renixx$date)
 renixx <- renixx[order(renixx$date), ]
 rownames(renixx) <- NULL
 renixx <- renixx[renixx$date < '2024-03-01' &
                    renixx$date > '2004-12-31', ]
-ggplot(renixx, aes(date, close)) + geom_line() + ggtitle('') +
-  xlab('Time') + ylab('Closed Value')
 #Log-returns
 df <- renixx %>% dplyr::select(1, 3)
 rownames(df) <- NULL
 df$abs <- abs(c(0, diff(log(df$close))))
 #Absolute log-returns
 df$rate <- c(0, diff(log(df$close)))
-ggplot(df, aes(date, abs)) + geom_line() + geom_line() + ggtitle('') +
-  xlab('Time') + ylab('Absolute Returns')
-```
-
-The empirical analysis is conducted at a monthly frequency, as the forecasting phase incorporates textual data (e.g. Google Trends), which are available only at that frequency.
-
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: These plots are for reference only and not included in the article.
+#Monthly
 Month <- as.Date(cut(df$date, "month"))
 renixx_m <- aggregate(close ~ Month, df, mean)
 #Log-returns
@@ -520,9 +518,234 @@ renixx_m$Renixx <- c(0, diff(log(renixx_m$close)))
 renixx_m$abs <- c(0, abs(diff(log(renixx_m$close))))
 #Standardized values
 renixx_m$St <- log(renixx_m$close)
-ggplot(renixx_m, aes(Month, abs)) + geom_line() + xlab('Time') + ylab('Absolute Returns')
-ggplot(renixx_m, aes(Month, close)) + geom_line() + xlab('Time') + ylab('Closed Value')
+#Weekly
+weekly_dates <- floor_date(renixx$date, unit = "week", week_start = 1)
+renixx_w <- apply.weekly(renixx, mean)
+renixx_w$date <- unique(weekly_dates)
+##Brent Crude front month price
+Oil <-
+  read.csv("Economic variables/Oil_WTI.csv")
+Oil$Date <- dmy(Oil$Exchange.Date)
+Oil <- Oil[order(Oil$Date), ]
+Oil <- Oil[, c(14, 2)]
+rownames(Oil) <- NULL
+Month <- as.Date(cut(Oil$Date, "month"))
+Oil_m <- aggregate(Close ~ Month, Oil, mean)
+#Transformations
+Oil_m$Rate_O <- c(0, diff(log(Oil_m$Close)))
+Oil_m$Rate_s <- scale(c(0, diff(Oil_m$Close)), scale = TRUE, center = TRUE)
+rownames(Oil_m) <- NULL
+##MSCI_WORLD
+MSCI <- read.csv("Economic variables/MSCI World.csv")
+MSCI$Date <- dmy(MSCI$Exchange.Date)
+MSCI <- MSCI[, c(9, 2)]
+MSCI <- MSCI[order(MSCI$Date), ]
+rownames(MSCI) <- NULL
+Month <- as.Date(cut(MSCI$Date, "month"))
+MSCI$Close <- as.numeric(gsub(",", "", MSCI$Close))
+MSCI_m <- aggregate(Close ~ Month, MSCI, mean)
+MSCI_m$Close <- as.numeric(MSCI_m$Close)
+#Transformations
+MSCI_m$Rate_ms <- c(0, diff(log(MSCI_m$Close)))
+MSCI_m$Rate_s <-
+  scale(c(0, diff(MSCI_m$Close)), scale = TRUE, center = TRUE)
+#Geopolitical index
+data_gpr_export <-
+  read_excel("Economic variables/GPI.xls")
+geo_i <- data_gpr_export %>% dplyr::select(6, 3)
+colnames(geo_i)[1] <- "Date"
+geo_i2 <-
+  geo_i[geo_i$Date < "2024-03-01" &
+          geo_i$Date >= "2005-01-01", ] #2005/01/01-2024/03/01
+Month <- as.Date(cut(geo_i2$Date, "month"))
+geo_m <- aggregate(geo_i2$GPRD ~ Month, geo_i2, mean)
+colnames(geo_m)[2] <- "GPRH"
+geo_m$GPRH <- as.numeric(geo_m$GPRH)
+#Transformations
+geo_m$Rate_g <- c(0, diff(log(geo_m$GPRH)))
+geo_m$St <- scale(c(0, diff(geo_m$GPRH)), scale = TRUE, center = TRUE)
+#EPU
+GEPUCURRENT <- read.csv("Economic variables/GEPUCURRENT.csv")
+GEPUCURRENT$DATE <- ymd(GEPUCURRENT$DATE)
+GEPUCURRENT <- GEPUCURRENT[97:326, ] #2005/01/01-2024/02/01
+rownames(GEPUCURRENT) <- NULL
+#Transformations
+GEPUCURRENT$Rate <- c(0, diff(log(GEPUCURRENT$GEPUCURRENT)))
+GEPUCURRENT$Rate_s <-
+  scale(c(0, diff(GEPUCURRENT$GEPUCURRENT)), scale = TRUE, center = TRUE)
+#OFR
+Fs <- read.csv("Economic variables/FSI.csv")
+Month <- as.Date(cut(ymd(Fs$Date), "month"))
+Fs_m <- aggregate(OFR.FSI ~ Month, Fs, mean)
+Fs_m <- Fs_m[61:290, ] #2005/01/01-2024/02/01
+#Transformations
+Fs_m$Rate <- c(0, diff(Fs_m$OFR.FSI))
+Fs_m$Rate_s <-
+  scale(c(0, diff(Fs_m$OFR.FSI)), scale = TRUE, center = TRUE)
+#Financial/economic variables
+Finance <- renixx_m[, c(1, 3)]
+colnames(Finance)[2] <- "Renixx"
+Finance$Oil_p <- Oil_m$Rate_O
+Finance$MSCI <- MSCI_m$Rate_ms
+Finance$EPU <- GEPUCURRENT$Rate
+Finance$OFR <- Fs_m$Rate
+Finance$Geo_i <- geo_m$Rate_g
+#Financial dataset
+Finance_2 <- renixx_m[, c(1, 2)]
+colnames(Finance_2)[2] <- "Renixx"
+Finance_2$Renixx <- scale(Finance_2$Renixx, center = TRUE, scale = TRUE)
+Finance_2$Oil_p <- scale(Oil_m$Close, center = TRUE, scale = TRUE)
+Finance_2$Geo_i <- scale(geo_m$GPRH, center = TRUE, scale = TRUE)
+Finance_2$MSCI <- scale(MSCI_m$Close, center = TRUE, scale = TRUE)
+Finance_2$EPU <- scale(GEPUCURRENT$GEPUCURRENT, center = TRUE, scale = TRUE)
+Finance_2$OFR <- scale(Fs_m$OFR.FSI, center = TRUE, scale = TRUE)
+##Green Energy
+green_e <-
+  read.csv("Google Trends/Green_energy.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+green_e$Time <- ymd(green_e$Time)
+green_e$Rate <- c(0, diff(log(green_e$Absolute.Google.Search.Volume)))
+Climate <- as.data.frame(green_e[, 1])
+colnames(Climate)[1] <- "Date"
+Climate$Green_e <- green_e[, 4]
+##New technology
+Tech_d <-
+  read.csv("Google Trends/New_Technology.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+Tech_d$Rate <- c(0, diff(log(Tech_d$Absolute.Google.Search.Volume)))
+Climate$Tech <- Tech_d[, 4]
+##Energy index
+Energy_i <-
+  read.csv("Google Trends/Energy_index.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+Energy_i <- Energy_i[, c(1, 2, 3)]
+Energy_i$Rate <-
+  c(0, diff(log(Energy_i$Absolute.Google.Search.Volume)))
+Climate$Energy_i <- Energy_i[, 4]
+##Global warming
+global_w <-
+  read.csv("Google Trends/Global_warming.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+global_w$Rate <-
+  c(0, diff(log(global_w$Absolute.Google.Search.Volume)))
+Climate$Warming <- global_w[, 4]
+##Natural disaster
+Natural <-
+  read.csv("Google Trends/Natural_disasters.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+Natural$Rate <- c(0, diff(log(Natural$Absolute.Google.Search.Volume)))
+Climate$Natural <- Natural[, 4]
+##Carbon price
+Carbon_p <-
+  read.csv("Google Trends/Carbon_price.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+Carbon_p$Rate <-
+  c(0, diff(log(Carbon_p$Absolute.Google.Search.Volume)))
+Climate$Carbon_p <- Carbon_p[, 4]
+##Carbon tax
+Tax <-
+  read.csv("Google Trends/Carbon_tax.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+Tax$Rate <- c(0, diff(log(Tax$Absolute.Google.Search.Volume)))
+Climate$Tax <- Tax[, 4]
+##Energy shares
+Energy_s <-
+  read.csv("Google Trends/Energy_shares.csv",
+           header = TRUE,
+           comment.char = "#")[13:242, ]
+Energy_s$Rate <-
+  c(0, diff(log(Energy_s$Absolute.Google.Search.Volume)))
+Climate$Energy_s <- Energy_s[, 4]
+#Text dataset
+Climate_2 <- as.data.frame(green_e[, 1])
+colnames(Climate_2)[1] <- "Date"
+#Scaling
+Climate_2$Green_e <-
+  scale(as.numeric(green_e[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Tech <-
+  scale(as.numeric(Tech_d[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Warming <-
+  scale(as.numeric(global_w[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Energy_i <-
+  scale(as.numeric(Energy_i[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Natural <-
+  scale(as.numeric(Natural[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Carbon_p <-
+  scale(as.numeric(Carbon_p[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Energy_s <-
+  scale(as.numeric(Energy_s[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Energy_T <-
+  scale(as.numeric(Energy_s[, 3] + Energy_i[, 3]) / 2,
+        center = TRUE,
+        scale = TRUE)
+Climate_2$Energy_s <-
+  scale(as.numeric(Energy_s[, 3]), center = TRUE, scale = TRUE)
+Climate_2$Tax <- scale(as.numeric(Tax[, 3]), center = TRUE, scale = TRUE)
+#Final dataset (log-diff)
+Finance$Merge <- format(as.Date(Finance$Month), "%Y-%m")
+Climate$Merge <- format(as.Date(Climate$Date), "%Y-%m")
+Data <- merge(Finance, Climate, by = "Merge")
+Data <- Data[, -c(1, 9)]
+rownames(Data) <- NULL
+#Final dataset (scaled)
+Climate_2 <-
+  Climate_2[c(
+    'Date',
+    'Green_e',
+    'Tech',
+    'Warming',
+    'Natural',
+    'Carbon_p',
+    'Energy_i',
+    'Energy_s',
+    'Tax'
+  )]
+Finance_2$Merge <- format(as.Date(Finance_2$Month), "%Y-%m")
+Climate_2$Merge <- format(as.Date(Climate_2$Date), "%Y-%m")
+#Origianl dataset
+Data_or <- merge(Finance_2, Climate_2, by = "Merge")
+Data_or <- Data_or[, -c(1, 9)]
+rownames(Data_or) <- NULL
+#iShares_GCE
+iShares_Clean_Energy <- read.csv("Economic variables/iShares_Clean_Energy.csv")
+iShares_Clean_Energy$Date <- dmy(iShares_Clean_Energy$Exchange.Date)
+iShares_Clean_Energy <- iShares_Clean_Energy[, c(17, 2)]
+iShares_Clean_Energy <- iShares_Clean_Energy[order(iShares_Clean_Energy$Date), ]
+rownames(iShares_Clean_Energy) <- NULL
+iShares_Clean_Energy$Close <- as.numeric(gsub(",", "", iShares_Clean_Energy$Close))
+Month <- as.Date(cut(iShares_Clean_Energy$Date, "month"))
+iShares_Clean_Energy_m <- aggregate(Close ~ Month, iShares_Clean_Energy, mean)
+iShares_Clean_Energy_m$Close <- as.numeric(iShares_Clean_Energy_m$Close)
+#SP_GCE
+SP_Clean_Energy <- read.csv("Economic variables/S&P_Clean_Energy.csv")
+SP_Clean_Energy$Date <- dmy(SP_Clean_Energy$Exchange.Date)
+SP_Clean_Energy <- SP_Clean_Energy[, c(5, 2)]
+SP_Clean_Energy <- SP_Clean_Energy[order(SP_Clean_Energy$Date), ]
+rownames(SP_Clean_Energy) <- NULL
+Month <- as.Date(cut(SP_Clean_Energy$Date, "month"))
+SP_Clean_Energy$Close <- as.numeric(gsub(",", "", SP_Clean_Energy$Close))
+SP_Clean_Energy_m <- aggregate(Close ~ Month, SP_Clean_Energy, mean)
+SP_Clean_Energy_m$Close <- as.numeric(SP_Clean_Energy_m$Close)
+#MSCI_GAE
+MSCI_Alternative_Energy_Price <- read.csv("Economic variables/MSCI_Alternative_Energy_Price.csv")
+MSCI_Alternative_Energy_Price$Date <- dmy(MSCI_Alternative_Energy_Price$Exchange.Date)
+MSCI_Alternative_Energy_Price <- MSCI_Alternative_Energy_Price[, c(9, 2)]
+MSCI_Alternative_Energy_Price <- MSCI_Alternative_Energy_Price[order(MSCI_Alternative_Energy_Price$Date), ]
+rownames(MSCI_Alternative_Energy_Price) <- NULL
+Month <- as.Date(cut(MSCI_Alternative_Energy_Price$Date, "month"))
+MSCI_Alternative_Energy_Price$Close <- as.numeric(gsub(",", "", MSCI_Alternative_Energy_Price$Close))
+MSCI_Alternative_Energy_Price_m <- aggregate(Close ~ Month, MSCI_Alternative_Energy_Price, mean)
+MSCI_Alternative_Energy_Price_m$Close <- as.numeric(MSCI_Alternative_Energy_Price_m$Close)
 ```
+
+The empirical analysis is conducted at a monthly frequency, as the forecasting phase incorporates textual data (e.g. Google Trends), which are available only at that frequency.
 
 ```{r, fig.width = 14, fig.height = 8}
 #NOTE: This plot is for reference only and not included in the article.
@@ -545,13 +768,11 @@ plot(
   main = ''
 )
 abline(v = breack, lty = 2, col = 'red')
-test
 ```
 
 A robustness analysis is subsequently conducted using weekly frequency data to confirm the results obtained from the low-frequency analysis.
 
 ```{r, fig.width = 14, fig.height = 8}
-#NOTE: This plot is for reference only and not included in the article
 #KS-CPM
 options(xts.message.period.apply.mean = FALSE)
 weekly_dates <- floor_date(renixx$date, unit = "week", week_start = 1)
@@ -563,17 +784,6 @@ test_w <-
                 ARL0 = 5000,
                 startup = 200) #Startup = 200 (20%) and ARL0 = 5000 are default values.
 breack_w <- renixx_w$date[test_w$changePoints]
-plot(
-  renixx_w$date,
-  renixx_w$close,
-  type = "l",
-  xlab = "Time",
-  ylab = "Closed Value",
-  bty = "l",
-  main = ''
-)
-abline(v = breack_w, lty = 2, col = 'red')
-test_w
 ```
 
 The results at the monthly frequency are compared with those derived from the BSADF test (Figure 2 in the article).
@@ -602,46 +812,7 @@ As reported by the above results, there is a clear evidence that the BSADF is pa
 
 # Propagation phase
 
-To analyze green bubbles, various variables will be taken into account. Two main groups stand out: economic/financial variables and Google Trends data.
-
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: This plot is for reference only and not included in the article.
-#Brent Crude front month price
-Oil <-
-  read.csv("Economic variables/Oil_WTI.csv")
-Oil$Date <- dmy(Oil$Exchange.Date)
-Oil <- Oil[order(Oil$Date), ]
-Oil <- Oil[, c(14, 2)]
-rownames(Oil) <- NULL
-Month <- as.Date(cut(Oil$Date, "month"))
-Oil_m <- aggregate(Close ~ Month, Oil, mean)
-#Transformation
-Oil_m$Rate_O <- c(0, diff(log(Oil_m$Close)))
-Oil_m$Rate_s <- scale(c(0, diff(Oil_m$Close)), scale = TRUE, center = TRUE)
-rownames(Oil_m) <- NULL
-ggplot(Oil_m, aes(Month, Close)) + geom_line() + xlab('Time') + ylab('Closed Value')
-```
-
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: This plot is for reference only and not included in the article.
-#MSCI_WORLD
-MSCI <- read.csv("Economic variables/MSCI World.csv")
-MSCI$Date <- dmy(MSCI$Exchange.Date)
-MSCI <- MSCI[, c(9, 2)]
-MSCI <- MSCI[order(MSCI$Date), ]
-rownames(MSCI) <- NULL
-Month <- as.Date(cut(MSCI$Date, "month"))
-MSCI$Close <- as.numeric(gsub(",", "", MSCI$Close))
-MSCI_m <- aggregate(Close ~ Month, MSCI, mean)
-MSCI_m$Close <- as.numeric(MSCI_m$Close)
-#Transformations
-MSCI_m$Rate_ms <- c(0, diff(log(MSCI_m$Close)))
-MSCI_m$Rate_s <-
-  scale(c(0, diff(MSCI_m$Close)), scale = TRUE, center = TRUE)
-ggplot(MSCI_m, aes(Month, Close)) + geom_line() + xlab('Time') + ylab('Closed Value')
-```
-
-The following section highlights the two bubbles identified by the KS-CPM in the renewable energy market. These findings are further supported by the behavior of the oil and MSCI ratio. The below chunk outlines the plot reported in Figure 3 in the article.
+The following chunk highlights the two bubbles identified by the KS-CPM in the renewable energy market. These findings are further supported by the behavior of the oil and MSCI ratio. The below chunk outlines the plot reported in Figure 3 in the article.
 
 ```{r, fig.width = 14, fig.height = 8}
 #Ratio
@@ -840,365 +1011,6 @@ g <- ggplot(renixx_w, aes(x = Date, y = close)) +
 grid.arrange(g)
 ```
 
-Below, the GPR index is outlined.
-
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: This plot is for reference only and not included in the article.
-#Geopolitical index
-data_gpr_export <-
-  read_excel("Economic variables/GPI.xls")
-geo_i <- data_gpr_export %>% dplyr::select(6, 3)
-colnames(geo_i)[1] <- "Date"
-geo_i2 <-
-  geo_i[geo_i$Date < "2024-03-01" &
-          geo_i$Date >= "2005-01-01", ] #2005/01/01-2024/03/01
-Month <- as.Date(cut(geo_i2$Date, "month"))
-geo_m <- aggregate(geo_i2$GPRD ~ Month, geo_i2, mean)
-colnames(geo_m)[2] <- "GPRH"
-geo_m$GPRH <- as.numeric(geo_m$GPRH)
-#Transformations
-geo_m$Rate_g <- c(0, diff(log(geo_m$GPRH)))
-geo_m$St <- scale(c(0, diff(geo_m$GPRH)), scale = TRUE, center = TRUE)
-ggplot(geo_m, aes(Month, GPRH)) + geom_line() + xlab('Time') + ylab('Index Value')
-```
-
-Below, the FSI as well as the EPU index are outlined.
-
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: These plots are for reference only and not included in the article
-#EPU
-GEPUCURRENT <- read.csv("Economic variables/GEPUCURRENT.csv")
-GEPUCURRENT$DATE <- ymd(GEPUCURRENT$DATE)
-GEPUCURRENT <- GEPUCURRENT[97:326, ] #2005/01/01-2024/02/01
-rownames(GEPUCURRENT) <- NULL
-#Transformation
-GEPUCURRENT$Rate <- c(0, diff(log(GEPUCURRENT$GEPUCURRENT)))
-GEPUCURRENT$Rate_s <-
-  scale(c(0, diff(GEPUCURRENT$GEPUCURRENT)), scale = TRUE, center = TRUE)
-#OFR
-Fs <- read.csv("Economic variables/FSI.csv")
-Month <- as.Date(cut(ymd(Fs$Date), "month"))
-Fs_m <- aggregate(OFR.FSI ~ Month, Fs, mean)
-Fs_m <- Fs_m[61:290, ] #2005/01/01-2024/02/01
-#Transformation
-Fs_m$Rate <- c(0, diff(Fs_m$OFR.FSI))
-Fs_m$Rate_s <-
-  scale(c(0, diff(Fs_m$OFR.FSI)), scale = TRUE, center = TRUE)
-ggplot(Fs_m, aes(Month, OFR.FSI)) + geom_line() + xlab('Time') + ylab('Index Value')
-ggplot(GEPUCURRENT, aes(DATE, GEPUCURRENT)) + geom_line() + xlab('Time') + ylab('Index Value')
-```
-
-Finally, both economic and financial variables are grouped into a single dataset.
-
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: This plot is for reference only and not included in the article
-#Financial/economic variables
-Finance <- renixx_m[, c(1, 3)]
-colnames(Finance)[2] <- "Renixx"
-Finance$Oil_p <- Oil_m$Rate_O
-Finance$MSCI <- MSCI_m$Rate_ms
-Finance$EPU <- GEPUCURRENT$Rate
-Finance$OFR <- Fs_m$Rate
-Finance$Geo_i <- geo_m$Rate_g
-#Financial dataset
-Finance_2 <- renixx_m[, c(1, 2)]
-colnames(Finance_2)[2] <- "Renixx"
-Finance_2$Renixx <- scale(Finance_2$Renixx, center = TRUE, scale = TRUE)
-Finance_2$Oil_p <- scale(Oil_m$Close, center = TRUE, scale = TRUE)
-Finance_2$Geo_i <- scale(geo_m$GPRH, center = TRUE, scale = TRUE)
-Finance_2$MSCI <- scale(MSCI_m$Close, center = TRUE, scale = TRUE)
-Finance_2$EPU <- scale(GEPUCURRENT$GEPUCURRENT, center = TRUE, scale = TRUE)
-Finance_2$OFR <- scale(Fs_m$OFR.FSI, center = TRUE, scale = TRUE)
-#Plot
-ggplot() +
-  geom_line(data = Finance_2, aes(x = Month, y = Renixx, color = "Rennix")) +
-  geom_line(data = Finance_2, aes(x = Month, y = MSCI, color = "Global MSCI")) +
-  geom_line(data = Finance_2, aes(x = Month, y = Geo_i, color = "Geopolitical index")) +
-  geom_line(data = Finance_2, aes(x = Month, y = Oil_p, color = "Oil price")) +
-  geom_line(data = Finance_2, aes(x = Month, y = EPU, color = "EPU")) +
-  geom_line(data = Finance_2, aes(x = Month, y = OFR, color = "OFR")) +
-  xlab('Time') + ggtitle('Financial time series') +
-  ylab('Monthly series') + scale_color_manual(
-    name = 'Series',
-    breaks = c(
-      'Rennix',
-      'Global MSCI',
-      'Geopolitical index',
-      'Oil price',
-      'EPU',
-      'OFR'
-    ),
-    values = c(
-      'Rennix' = 'green',
-      'Global MSCI' = 'red',
-      'Geopolitical index' = 'blue',
-      'Oil price' = 'brown',
-      'EPU' = 'orange',
-      'OFR' = 'grey'
-    )
-  )
-```
-
-Similarly, the text-based variables used in the article have been uploaded.
-
-```{r, fig.width = 14, fig.height = 8}
-#NOTE: This plot is for reference only and not included in the article
-#Green Energy
-green_e <-
-  read.csv("Google Trends/Green_energy.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-green_e$Time <- ymd(green_e$Time)
-green_e$Rate <- c(0, diff(log(green_e$Absolute.Google.Search.Volume)))
-Climate <- as.data.frame(green_e[, 1])
-colnames(Climate)[1] <- "Date"
-Climate$Green_e <- green_e[, 4]
-#New technology
-Tech_d <-
-  read.csv("Google Trends/New_Technology.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-Tech_d$Rate <- c(0, diff(log(Tech_d$Absolute.Google.Search.Volume)))
-Climate$Tech <- Tech_d[, 4]
-#Energy index
-Energy_i <-
-  read.csv("Google Trends/Energy_index.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-Energy_i <- Energy_i[, c(1, 2, 3)]
-Energy_i$Rate <-
-  c(0, diff(log(Energy_i$Absolute.Google.Search.Volume)))
-Climate$Energy_i <- Energy_i[, 4]
-#Global warming
-global_w <-
-  read.csv("Google Trends/Global_warming.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-global_w$Rate <-
-  c(0, diff(log(global_w$Absolute.Google.Search.Volume)))
-Climate$Warming <- global_w[, 4]
-#Natural disaster
-Natural <-
-  read.csv("Google Trends/Natural_disasters.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-Natural$Rate <- c(0, diff(log(Natural$Absolute.Google.Search.Volume)))
-Climate$Natural <- Natural[, 4]
-#Carbon price
-Carbon_p <-
-  read.csv("Google Trends/Carbon_price.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-Carbon_p$Rate <-
-  c(0, diff(log(Carbon_p$Absolute.Google.Search.Volume)))
-Climate$Carbon_p <- Carbon_p[, 4]
-#Carbon tax
-Tax <-
-  read.csv("Google Trends/Carbon_tax.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-Tax$Rate <- c(0, diff(log(Tax$Absolute.Google.Search.Volume)))
-Climate$Tax <- Tax[, 4]
-#Energy shares
-Energy_s <-
-  read.csv("Google Trends/Energy_shares.csv",
-           header = TRUE,
-           comment.char = "#")[13:242, ]
-Energy_s$Rate <-
-  c(0, diff(log(Energy_s$Absolute.Google.Search.Volume)))
-Climate$Energy_s <- Energy_s[, 4]
-#Text dataset
-Climate_2 <- as.data.frame(green_e[, 1])
-colnames(Climate_2)[1] <- "Date"
-#Scaling
-Climate_2$Green_e <-
-  scale(as.numeric(green_e[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Tech <-
-  scale(as.numeric(Tech_d[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Warming <-
-  scale(as.numeric(global_w[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Energy_i <-
-  scale(as.numeric(Energy_i[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Natural <-
-  scale(as.numeric(Natural[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Carbon_p <-
-  scale(as.numeric(Carbon_p[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Energy_s <-
-  scale(as.numeric(Energy_s[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Energy_T <-
-  scale(as.numeric(Energy_s[, 3] + Energy_i[, 3]) / 2,
-        center = TRUE,
-        scale = TRUE)
-Climate_2$Energy_s <-
-  scale(as.numeric(Energy_s[, 3]), center = TRUE, scale = TRUE)
-Climate_2$Tax <- scale(as.numeric(Tax[, 3]), center = TRUE, scale = TRUE)
-#Plot
-ggplot() +
-  geom_line(data = Climate_2, aes(x = Date, y = Green_e, color = "Green Energy")) +
-  geom_line(data = Climate_2, aes(x = Date, y = Energy_i, color = "Energy Index")) +
-  geom_line(data = Climate_2, aes(x = Date, y = Warming, color = "Global Warming")) +
-  geom_line(data = Climate_2, aes(x = Date, y = Natural, color = "Natural Disasters")) +
-  geom_line(data = Climate_2, aes(x = Date, y = Carbon_p, color = "Carbon price")) +
-  geom_line(data = Climate_2, aes(x = Date, y = Energy_s, color = "Energy shares")) +
-  geom_line(data = Climate_2, aes(x = Date, y = Tax, color = "Carbon Tax")) +
-  geom_line(data = Climate_2, aes(x = Date, y = Tech, color = "New Technology")) +
-  xlab('Time') + ggtitle('Text-time series') +
-  ylab('Monthly series') + scale_color_manual(
-    name = 'Series',
-    breaks = c(
-      'Green Energy',
-      'Global Warming',
-      'Natural Disasters',
-      'Carbon price',
-      "New Technology",
-      'Energy Index',
-      'Green Bond',
-      'Carbon Emissions',
-      'Energy shares',
-      'Carbon Tax'
-    ),
-    values = c(
-      'Green Energy' = 'green',
-      'Global Warming' = 'red',
-      'Natural Disasters' = 'gold',
-      'Carbon price' = 'brown',
-      'New Technology' = 'purple',
-      'Energy Index' = 'blue',
-      'Carbon Emissions' = 'orange',
-      'Energy shares' = 'violet',
-      'Carbon Tax' = 'grey'
-    )
-  )
-```
-
-The final dataset is built as below.
-
-```{r}
-#Final dataset (log-diff)
-Finance$Merge <- format(as.Date(Finance$Month), "%Y-%m")
-Climate$Merge <- format(as.Date(Climate$Date), "%Y-%m")
-Data <- merge(Finance, Climate, by = "Merge")
-Data <- Data[, -c(1, 9)]
-rownames(Data) <- NULL
-```
-
-```{r}
-#Final dataset (scaled)
-Climate_2 <-
-  Climate_2[c(
-    'Date',
-    'Green_e',
-    'Tech',
-    'Warming',
-    'Natural',
-    'Carbon_p',
-    'Energy_i',
-    'Energy_s',
-    'Tax'
-  )]
-Finance_2$Merge <- format(as.Date(Finance_2$Month), "%Y-%m")
-Climate_2$Merge <- format(as.Date(Climate_2$Date), "%Y-%m")
-#Origianl dataset
-Data_or <- merge(Finance_2, Climate_2, by = "Merge")
-Data_or <- Data_or[, -c(1, 9)]
-rownames(Data_or) <- NULL
-```
-
-Before proceeding, both the Augmented Dickey-Fuller (ADF) test are conducted to detect the presence of a unit root.
-
-```{r, echo = TRUE, include = TRUE}
-#NOTE: These were included in a previous version of the article and are retained for reference.
-#ADF for text data
-summary(ur.df(
-  Climate[, "Carbon_p"],
-  #lag=12 for seasonality
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Climate[, "Green_e"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Climate[, "Tech"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Climate[, "Warming"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Climate[, "Natural"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Climate[, "Tax"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Climate[, "Energy_s"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Climate[, "Energy_i"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-#ADF for economic data
-summary(ur.df(
-  Finance[, "Oil_p"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Finance[, "Renixx"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Finance[, "MSCI"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Finance[, "EPU"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Finance[, "OFR"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-summary(ur.df(
-  Finance[, "Geo_i"],
-  type = "drift",
-  lags = 1,
-  selectlags = "AIC"
-))
-#Arch test due to no log-transformation
-archtest(Finance[, "OFR"])
-```
-
 The propagation effects of both the Renixx index and oil prices are evaluated using econometric techniques. Specifically, a cointegration analysis is conducted on the variables under consideration (e.g. Johansen).
 
 ```{r}
@@ -1249,9 +1061,7 @@ summary(vecm_model$rlm)[2]
 cat("Log-likelihood:", logLik_cajorls(vecm_model), "\n")
 ```
 
-The following chunks are dedicated to analyzing the dynamics of bubbles in the Renixx index. 
-
-Each time series is divided according to the three stages detected by the KS-CPM.
+The following chunks are dedicated to analyzing the dynamics of bubbles in the Renixx index. Each time series is divided according to the three stages detected by the KS-CPM.
 
 ```{r}
 #Codification
@@ -1433,48 +1243,15 @@ Considering the limited sample size given by monthly time seires data, in the fo
 
 * MSCI Global Alternative Energy Index (MSCI_GAE).
 
-```{r}
-#iShares_GCE
-iShares_Clean_Energy <- read.csv("Economic variables/iShares_Clean_Energy.csv")
-iShares_Clean_Energy$Date <- dmy(iShares_Clean_Energy$Exchange.Date)
-iShares_Clean_Energy <- iShares_Clean_Energy[, c(17, 2)]
-iShares_Clean_Energy <- iShares_Clean_Energy[order(iShares_Clean_Energy$Date), ]
-rownames(iShares_Clean_Energy) <- NULL
-iShares_Clean_Energy$Close <- as.numeric(gsub(",", "", iShares_Clean_Energy$Close))
-Month <- as.Date(cut(iShares_Clean_Energy$Date, "month"))
-iShares_Clean_Energy_m <- aggregate(Close ~ Month, iShares_Clean_Energy, mean)
-iShares_Clean_Energy_m$Close <- as.numeric(iShares_Clean_Energy_m$Close)
-#SP_GCE
-SP_Clean_Energy <- read.csv("Economic variables/S&P_Clean_Energy.csv")
-SP_Clean_Energy$Date <- dmy(SP_Clean_Energy$Exchange.Date)
-SP_Clean_Energy <- SP_Clean_Energy[, c(5, 2)]
-SP_Clean_Energy <- SP_Clean_Energy[order(SP_Clean_Energy$Date), ]
-rownames(SP_Clean_Energy) <- NULL
-Month <- as.Date(cut(SP_Clean_Energy$Date, "month"))
-SP_Clean_Energy$Close <- as.numeric(gsub(",", "", SP_Clean_Energy$Close))
-SP_Clean_Energy_m <- aggregate(Close ~ Month, SP_Clean_Energy, mean)
-SP_Clean_Energy_m$Close <- as.numeric(SP_Clean_Energy_m$Close)
-#MSCI_GAE
-MSCI_Alternative_Energy_Price <- read.csv("Economic variables/MSCI_Alternative_Energy_Price.csv")
-MSCI_Alternative_Energy_Price$Date <- dmy(MSCI_Alternative_Energy_Price$Exchange.Date)
-MSCI_Alternative_Energy_Price <- MSCI_Alternative_Energy_Price[, c(9, 2)]
-MSCI_Alternative_Energy_Price <- MSCI_Alternative_Energy_Price[order(MSCI_Alternative_Energy_Price$Date), ]
-rownames(MSCI_Alternative_Energy_Price) <- NULL
-Month <- as.Date(cut(MSCI_Alternative_Energy_Price$Date, "month"))
-MSCI_Alternative_Energy_Price$Close <- as.numeric(gsub(",", "", MSCI_Alternative_Energy_Price$Close))
-MSCI_Alternative_Energy_Price_m <- aggregate(Close ~ Month, MSCI_Alternative_Energy_Price, mean)
-MSCI_Alternative_Energy_Price_m$Close <- as.numeric(MSCI_Alternative_Energy_Price_m$Close)
-```
-
 Because of the escalating utilization of Google throughout the years, the chosen time frame extends from 2015 to nowadays. This decision aims to capture a heightened correlation between text variables and the Renixx index, as depicted in the above plot. In the one-step ahead exercise, four models are taken into account.
 
-* ARIMA
+* ARIMA.
 
-* ARIMAX_t (with exogenous variables at time t)
+* ARIMAX_t (with exogenous variables at time t).
 
-* ARIMAX_t1 (with exogenous variables at time t-1)
+* ARIMAX_t1 (with exogenous variables at time t-1).
  
-* BSTS
+* BSTS.
 
 Below are the summary statistics for the considered dataset (Table 5 in the article).
 
@@ -1492,10 +1269,7 @@ data_pred$SP_GCE <- SP_Clean_Energy_m$Close[73:182]
 data_pred$MSCI_GAE <- MSCI_Alternative_Energy_Price_m$Close[52:161]
 options(digits = 9) #For 3-digits results
 summary(data_pred[, c(1, 5, 3, 4)])
-```
-
-```{r}
-#Dataset
+#Dataset for the forecasting exercise
 data_pred <-
   data.frame(
     log(renixx_m$close),
@@ -1531,9 +1305,6 @@ colnames(data_pred) <-
     'Date'
   )
 rownames(data_pred) <- NULL
-```
-
-```{r}
 #iShares_GCE
 data_pred$iShares_GCE <- log(iShares_Clean_Energy_m$Close[91:200])
 #SP_GCE
@@ -1637,10 +1408,13 @@ for (i in 73:(sample - 1)) {
 This next chunk may take longer to execute than the previous ones, due to the computationally intensive estimation procedure.
 
 ```{r}
-#BSTS RENIXX
+#For reproducibility
 set.seed(004)
 registerDoSEQ()
 RNGkind("L'Ecuyer-CMRG")
+RhpcBLASctl::blas_set_num_threads(1)
+RhpcBLASctl::omp_set_num_threads(1)
+#BSTS RENIXX
 for (i in 73:(sample - 1)) {
   #Lag
   (ss <- list())
@@ -1912,29 +1686,15 @@ real_data <- c(data_pred$Renixx[74:110],
                data_pred$iShares_GCE[74:110],
                data_pred$SP_GCE[74:110])
 #SMAPE
-cat("SMAPE ARIMA:",
-    Metrics::smape(predictions_uni[, 1], real_data) * 100,
-    "\n") #By 100 to obtain the percentage
-cat("SMAPE BSTS:",
-    Metrics::smape(predictions_uni[, 2], real_data) * 100,
-    "\n")
-cat("SMAPE ARIMAX_t1:",
-    Metrics::smape(predictions_uni[, 3], real_data) * 100,
-    "\n")
-cat("SMAPE ARIMAX_t:",
-    Metrics::smape(predictions_uni[, 4], real_data) * 100,
-    "\n")
+cat("SMAPE ARIMA:", round(Metrics::smape(predictions_uni[, 1], real_data), 5) * 100, "\n") #By 100 to obtain the percentage
+cat("SMAPE BSTS:", round(Metrics::smape(predictions_uni[, 2], real_data), 5) * 100, "\n")
+cat("SMAPE ARIMAX_t1:", round(Metrics::smape(predictions_uni[, 3], real_data), 5) * 100, "\n")
+cat("SMAPE ARIMAX_t:", round(Metrics::smape(predictions_uni[, 4], real_data), 5) * 100, "\n")
 #RMSE
-cat("RMSE ARIMA:",
-    Metrics::rmse(predictions_uni[, 1], real_data),
-    "\n")
-cat("RMSE BSTS:", Metrics::rmse(predictions_uni[, 2], real_data), "\n")
-cat("RMSE ARIMAX_t1:",
-    Metrics::rmse(predictions_uni[, 3], real_data),
-    "\n")
-cat("RMSE ARIMAX_t:",
-    Metrics::rmse(predictions_uni[, 4], real_data),
-    "\n")
+cat("RMSE ARIMA:", round(Metrics::rmse(predictions_uni[, 1], real_data), 3), "\n")
+cat("RMSE BSTS:", round(Metrics::rmse(predictions_uni[, 2], real_data), 3), "\n")
+cat("RMSE ARIMAX_t1:", round(Metrics::rmse(predictions_uni[, 3], real_data), 3), "\n")
+cat("RMSE ARIMAX_t:", round(Metrics::rmse(predictions_uni[, 4], real_data), 3), "\n")
 ```
 
 ```{r}
@@ -2134,6 +1894,22 @@ colnames(data_pred) <-
   )
 rownames(data_pred) <- NULL
 options(digits = 9) #For 3-digits results
+Table_1 <- data_pred[, c(1, 5, 2, 4, 6, 3, 7:14)]
+colnames(Table_1) <- c(
+  "RENIXX",
+  "Brent Crude Oil Front Month price",
+  "MSCI",
+  "GEPU",
+  "FSI",
+  "GPR Energy Index",
+  "Energy Shares",
+  "Green Energy",
+  "Global Warming",
+  "Natural Disasters",
+  "Carbon Price",
+  "Carbon Tax",
+  "New Technology"
+)
 summary(data_pred[, c(1, 5, 2, 4, 6, 3, 7:14)])
 ```
 
@@ -2142,4 +1918,3 @@ To ensure full reproducibility, the following chunk displays the R version, plat
 ```{r session-info}
 sessionInfo()
 ```
-
