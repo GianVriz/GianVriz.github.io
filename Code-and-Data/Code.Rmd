@@ -17,7 +17,6 @@ install.packages("bruceR")
 install.packages("bsts")
 install.packages("cpm")
 install.packages("dplyr")
-install.packages("doParallel")
 install.packages("exuber")
 install.packages("fDMA")
 install.packages("forecast")
@@ -31,13 +30,14 @@ install.packages("MCS")
 install.packages("Metrics")
 install.packages("multDM")
 install.packages("readxl")
-install.packages("RhpcBLASctl")
 install.packages("rugarch")
 install.packages("tseries")
 install.packages("urca")
 install.packages("vars")
 install.packages("xts")
 install.packages("zoo")
+install.packages("doParallel")
+install.packages("RhpcBLASctl")
 ```
 
 After installing all the required packages, the libraries are loaded.
@@ -1917,4 +1917,5 @@ To ensure full reproducibility, the following chunk displays the R version, plat
 
 ```{r session-info}
 sessionInfo()
+
 ```
