@@ -1422,6 +1422,7 @@ Sys.setenv(
 )
 #BSTS RENIXX
 for (i in 73:(sample - 1)) {
+  set.seed(004)
   #Lag
   (ss <- list())
   ss <- AddAutoAr(ss, data_pred[1:i, c('Renixx')], lags = 1) #p=1 default
@@ -1431,6 +1432,7 @@ for (i in 73:(sample - 1)) {
     data_pred[1:i, c('Renixx')],
     state.specification = ss,
     niter = 1000,
+    seed = 005,
     #Number of MCMC draws
     ping = 0,
     expected.model.size = 3
@@ -1452,6 +1454,7 @@ for (i in 73:(sample - 1)) {
 #
 #BSTS MSCI_GAE
 for (i in 73:(sample - 1)) {
+  set.seed(004)
   #Lag
   (ss <- list())
   ss <- AddAutoAr(ss, data_pred[1:i, c('MSCI_GAE')], lags = 1) #p=1 default
@@ -1461,6 +1464,7 @@ for (i in 73:(sample - 1)) {
     data_pred[1:i, c('MSCI_GAE')],
     state.specification = ss,
     niter = 1000,
+    seed = 005,
     #Number of MCMC draws
     ping = 0,
     expected.model.size = 3
@@ -1480,6 +1484,7 @@ for (i in 73:(sample - 1)) {
 #
 #BSTS iShares_GCE
 for (i in 73:(sample - 1)) {
+  set.seed(004)
   #Lag
   (ss <- list())
   ss <- AddAutoAr(ss, data_pred[1:i, c('iShares_GCE')], lags = 1) #p=1 default
@@ -1489,6 +1494,7 @@ for (i in 73:(sample - 1)) {
     data_pred[1:i, c('iShares_GCE')],
     state.specification = ss,
     niter = 1000,
+    seed = 005,
     #Number of MCMC draws
     ping = 0,
     expected.model.size = 3
@@ -1508,6 +1514,7 @@ for (i in 73:(sample - 1)) {
 #
 #BSTS SP_GCE
 for (i in 73:(sample - 1)) {
+  set.seed(004)
   #Lag
   (ss <- list())
   ss <- AddAutoAr(ss, data_pred[1:i, c('SP_GCE')], lags = 1) #p=1 default
@@ -1517,6 +1524,7 @@ for (i in 73:(sample - 1)) {
     data_pred[1:i, c('SP_GCE')],
     state.specification = ss,
     niter = 1000,
+    seed = 005,
     #Number of MCMC draws
     ping = 0,
     expected.model.size = 3
